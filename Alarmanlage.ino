@@ -14,6 +14,9 @@ bool initialize=true;
 long initPhaseMS = 10000;
 long deactivateTimeout = 0;
 
+// Konvertiert Fernbedienungscodes in Verwendbare Numerische codes
+// Tasten 0 - 9 -> 0 - 9
+// Funktionstasten -> -1 - -11
 int mapKeycodes(unsigned long code) {
   switch (code) {
     case KEY_POWER:
@@ -61,6 +64,7 @@ int mapKeycodes(unsigned long code) {
   }
 }
 
+// Aktiviert oder deaktiviert den Alarm
 void setAlarmActive(bool active) {
   alarmIsActive = active;
   Dev::lcd.clear();
@@ -75,6 +79,8 @@ void setAlarmActive(bool active) {
   }
 }
 
+// Setzt die Zeit nach der der Alarm automatisch deaktiviert wird. (in Stunden)
+// Der wert wird aus dem eingabebuffer gelesen
 void setAlarmDuration(){
   long duration = 0;
   for(int i = 0 ; i< buffer.size(); i++){
@@ -95,6 +101,7 @@ void setAlarmDuration(){
   deactivateTimeout = duration;
 }
 
+// Prüft, ob das gegebene Passwort gültig ist
 bool passwordIsValid(const Password& value) {
   if (value.size() < 4) {
     return false;
@@ -110,10 +117,12 @@ bool passwordIsValid(const Password& value) {
   return true;
 }
 
+// Führt Steuer Codes aus
 void handleCommand(unsigned long keycode) {
   switch (keycode) {
     case -1:
-      {  //Power Button
+      {  // Power Button
+         // Alarm wird (de-)aktiviert
         if (!alarmIsActive) {
           setAlarmActive(true);
           break;
@@ -129,6 +138,8 @@ void handleCommand(unsigned long keycode) {
       }
     case -2:
       {  // Func/Stop Button
+         // Passwort wird geändert
+         // Nur bei deaktiviertem alarm erlaubt
         Dev::lcd.clear();
         if (!alarmIsActive) {
           if (buffer.full()) {
@@ -144,7 +155,9 @@ void handleCommand(unsigned long keycode) {
         break;
       }
     case -11:
-    {
+    { // ST-REPT Button
+      // Aktualisiere automatische Alarmdeaktivierung
+      // 0 = Keine deaktivierung
       setAlarmDuration();
       break;
     }
@@ -173,15 +186,19 @@ void setup() {
 
 void loop() {
   long time = millis();
+  // Nach init Phase - Alarm aktivieren
   if(initialize && time > startTime+initPhaseMS){
     initialize = false;
     setAlarmDuration();
     setAlarmActive(true);
   }
-  if(deactivateTimeout > 0 && time > startTime+deactivateTimeout){
+  
+  // nach Timeout - Alarm deaktivieren
+  if(alarmIsActive && deactivateTimeout > 0 && time > startTime+deactivateTimeout){
     setAlarmActive(false);
   }
-  do {
+  
+  do { // Einzelnes Zeichen von Fernbedienung lesen und ausgeben
     Dev::lcd.setCursor(buffer.size(), 1);
     if (IrReceiver.decode()) {
       unsigned long keycode = IrReceiver.decodedIRData.command;
@@ -208,6 +225,8 @@ void loop() {
     }
   } while (false);
 
+  // wenn alarm aktiv ist - Buzzer ton senden
+  // je näher, desto schneller
   if (alarmIsActive) {
     long a = Dev::sr04.Distance();
     if (a < 80) {
