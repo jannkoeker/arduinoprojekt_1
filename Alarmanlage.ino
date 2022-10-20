@@ -1,7 +1,6 @@
-#include <IRremote.h>
 #include <Array.h>
-#include "devices.h"
 #include "IR.h"
+#include "devices.h"
 
 using Password = Array<int, 4>;
 
@@ -9,10 +8,12 @@ Password buffer;
 Password password;
 
 bool alarmIsActive = false;
-long startTime= 0;
-bool initialize=true;
+long startTime = 0;
+bool initialize = true;
 long initPhaseMS = 10000;
 long deactivateTimeout = 0;
+
+decode_results results;
 
 // Konvertiert Fernbedienungscodes in Verwendbare Numerische codes
 // Tasten 0 - 9 -> 0 - 9
@@ -61,6 +62,8 @@ int mapKeycodes(unsigned long code) {
       return 8;
     case KEY_9:
       return 9;
+    default:
+      return -22;
   }
 }
 
@@ -81,28 +84,28 @@ void setAlarmActive(bool active) {
 
 // Setzt die Zeit nach der der Alarm automatisch deaktiviert wird. (in Stunden)
 // Der wert wird aus dem eingabebuffer gelesen
-void setAlarmDuration(){
+void setAlarmDuration() {
   long duration = 0;
-  for(int i = 0 ; i< buffer.size(); i++){
+  for (int i = 0; i < buffer.size(); i++) {
     duration *= 10;
     duration += buffer[i];
   }
   buffer.clear();
   Dev::lcd.clear();
   Dev::lcd.print("Set Timeout to");
-  Dev::lcd.setCursor(0,1);
+  Dev::lcd.setCursor(0, 1);
   Dev::lcd.print(duration);
   Dev::lcd.print(" hours");
   Serial.print("Set Timeout to ");
   Serial.print(duration);
   Serial.println(" hours");
 
-  duration *= 3600000; // ms pro h
+  duration *= 3600000;  // ms pro h
   deactivateTimeout = duration;
 }
 
 // Prüft, ob das gegebene Passwort gültig ist
-bool passwordIsValid(const Password& value) {
+bool passwordIsValid(const Password &value) {
   if (value.size() < 4) {
     return false;
   }
@@ -120,42 +123,39 @@ bool passwordIsValid(const Password& value) {
 // Führt Steuer Codes aus
 void handleCommand(unsigned long keycode) {
   switch (keycode) {
-    case -1:
-      {  // Power Button
-         // Alarm wird (de-)aktiviert
-        if (!alarmIsActive) {
-          setAlarmActive(true);
-          break;
-        }
-        if (passwordIsValid(buffer)) {
-          setAlarmActive(false);
-        } else if (!buffer.empty()) {
-          Dev::lcd.clear();
-          Serial.println("Inv Password after power");
+    case -1: {  // Power Button
+      // Alarm wird (de-)aktiviert
+      if (!alarmIsActive) {
+        setAlarmActive(true);
+        break;
+      }
+      if (passwordIsValid(buffer)) {
+        setAlarmActive(false);
+      } else if (!buffer.empty()) {
+        Dev::lcd.clear();
+        Serial.println("Inv Password after power");
+        Dev::lcd.print("Invalid Password");
+      }
+      break;
+    }
+    case -2: {  // Func/Stop Button
+      // Passwort wird geändert
+      // Nur bei deaktiviertem alarm erlaubt
+      Dev::lcd.clear();
+      if (!alarmIsActive) {
+        if (buffer.full()) {
+          Dev::lcd.print("Password set");
+          password = buffer;
+        } else {
+          Serial.println("Inv Password after set");
           Dev::lcd.print("Invalid Password");
         }
-        break;
+      } else {
+        Dev::lcd.print("Not allowed");
       }
-    case -2:
-      {  // Func/Stop Button
-         // Passwort wird geändert
-         // Nur bei deaktiviertem alarm erlaubt
-        Dev::lcd.clear();
-        if (!alarmIsActive) {
-          if (buffer.full()) {
-            Dev::lcd.print("Password set");
-            password = buffer;
-          } else {
-            Serial.println("Inv Password after set");
-            Dev::lcd.print("Invalid Password");
-          }
-        } else {
-          Dev::lcd.print("Not allowed");
-        }
-        break;
-      }
-    case -11:
-    { // ST-REPT Button
+      break;
+    }
+    case -11: {  // ST-REPT Button
       // Aktualisiere automatische Alarmdeaktivierung
       // 0 = Keine deaktivierung
       setAlarmDuration();
@@ -176,62 +176,70 @@ void setup() {
   password.push_back(3);
   password.push_back(4);
   Serial.begin(115200);
-  IrReceiver.begin(RECEIVER, ENABLE_LED_FEEDBACK);  // onboard LED blinks with received IR signal
+  Dev::irrecv.enableIRIn();
   Dev::lcd.begin(16, 2);
   Dev::lcd.clear();
   setAlarmActive(false);
   deactivateTimeout = 0;
-  initialize = true; 
+  initialize = true;
+}
+
+void readRemote() {
+  Dev::lcd.setCursor(buffer.size(), 1);
+  if (Dev::irrecv.decode(&results)) {
+    uint32_t keycode = results.value;
+    bool repeat = keycode == KeyCodes::KEY_REPEAT;
+    Dev::irrecv.resume();
+
+    Serial.print("got keycode 0x");
+    Serial.println(keycode, 16);
+    if (repeat)  // ignore repeat code
+    {
+      return;
+    }
+
+    int key = mapKeycodes(keycode);
+    Serial.println(key);
+
+    if (key >= 0 && !buffer.full()) {
+      buffer.push_back(key);
+      Dev::lcd.print(key);
+    } else if (key < 0) {
+      handleCommand(key);
+    } else {
+      Dev::lcd.setCursor(0, 1);
+      Dev::lcd.print("                  ");
+      buffer.clear();
+    }
+  }
 }
 
 void loop() {
   long time = millis();
   // Nach init Phase - Alarm aktivieren
-  if(initialize && time > startTime+initPhaseMS){
+  if (initialize && time > startTime + initPhaseMS) {
+    Serial.println("finish init");
     initialize = false;
     setAlarmDuration();
     setAlarmActive(true);
   }
-  
+
   // nach Timeout - Alarm deaktivieren
-  if(alarmIsActive && deactivateTimeout > 0 && time > startTime+deactivateTimeout){
+  if (alarmIsActive && deactivateTimeout > 0 &&
+      time > startTime + deactivateTimeout) {
+    Serial.println("deactivate per timer");
     setAlarmActive(false);
   }
-  
-  do { // Einzelnes Zeichen von Fernbedienung lesen und ausgeben
-    Dev::lcd.setCursor(buffer.size(), 1);
-    if (IrReceiver.decode()) {
-      unsigned long keycode = IrReceiver.decodedIRData.command;
-      
-      if ((IrReceiver.decodedIRData.flags & IRDATA_FLAGS_IS_REPEAT))  // ignore repeat code
-      {
-        IrReceiver.resume();
-        break;
-      }
-      IrReceiver.resume();
-      int key = mapKeycodes(keycode);
-      Serial.println(key);
 
-      if (key >= 0 && !buffer.full()) {
-        buffer.push_back(key);
-        Dev::lcd.print(key);
-      } else if (key < 0) {
-        handleCommand(key);
-      } else {
-        Dev::lcd.setCursor(0, 1);
-        Dev::lcd.print("                  ");
-        buffer.clear();
-      }
-    }
-  } while (false);
+  readRemote();
 
   // wenn alarm aktiv ist - Buzzer ton senden
   // je näher, desto schneller
   if (alarmIsActive) {
     long a = Dev::sr04.Distance();
-    if (a < 80) {
-      tone(3, NOTE_C4, 100);
-      delay(constrain(60 * a,100,1000));
+    if (a < 50) {
+      tone(10, NOTE_C4, 100);
+      delay(constrain(50 * a, 100, 1000));
     }
   }
 }
